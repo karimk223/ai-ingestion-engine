@@ -1,0 +1,19 @@
+# Python environment and generated files
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.DS_Store
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Private inputs, generated outputs and local model files
+storage/
+outputs/
+models/
+*.db
+*.db-shm
+*.db-wal
