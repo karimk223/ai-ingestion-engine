@@ -1,1 +1,18 @@
-pymupdf==2.0
+# Core API libraries; versions retained from the supplied package list.
+fastapi==0.138.0
+uvicorn==0.49.0
+pydantic==2.13.4
+httpx==0.28.1
+
+# Configuration, file uploads and database connections.
+python-dotenv==1.2.4
+python-multipart==0.0.32
+qdrant-client==1.20.0
+neo4j==6.4.1
+
+# PDF reading and OCR.
+PyMuPDF==2.0
+pytesseract==0.3.13
+pillow==12.2.0
+
+# Video dependencies will be added with their modules.
