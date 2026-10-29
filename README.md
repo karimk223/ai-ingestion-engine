@@ -1,6 +1,6 @@
 # AI Ingestion Engine
 
-A PDF and video ingestion project for retrieving information with references to its source. The current build provides the PDF processing, chunking, embedding and vector-storage modules.
+A PDF and video ingestion project for retrieving information with references to its source. The current build connects PDF ingestion, semantic search and local question answering with page references.
 
 ## Available modules
 
@@ -8,8 +8,11 @@ A PDF and video ingestion project for retrieving information with references to 
 - **Chunking:** sentence-based semantic splitting with an overlapping size-based fallback.
 - **Embeddings:** local Ollama `nomic-embed-text`, with 768 dimensions checked before use.
 - **Qdrant storage:** chunk text, embeddings and source metadata; similarity search and file filters.
+- **PDF ingestion:** connects extraction, chunking, embeddings and storage while preserving page numbers.
+- **Question search:** embeds a question and retrieves matching passages with source details.
+- **Local question answering:** assembles retrieved context for Ollama `qwen3:4b`, returns the final answer with source records, and requests abstention when the documents do not contain the answer.
 
-Video processing, the HTTP API, answer generation, graph retrieval, meeting notes and n8n workflows remain to be integrated. The complete ingestion-to-answer pipeline is not yet available.
+Video processing, the HTTP API, graph retrieval, meeting notes and n8n workflows remain to be integrated and validated. The video modules currently include OpenAI clients for transcription, vision and synthesis; they are separate from the local PDF path.
 
 ## Local setup
 
@@ -21,7 +24,10 @@ source .venv/bin/activate
 python -m pip install -r requirements.txt
 cp .env.example .env
 ollama pull nomic-embed-text
+ollama pull qwen3:4b
 ```
+
+The answer model download is approximately 2.5 GB. Existing local copies can be reused. The PDF path uses local embeddings and local answer generation and does not require a cloud account.
 
 Start the local services:
 
@@ -53,4 +59,41 @@ PY
 
 The sample exercises `pdf_text`, `ocr` and `pdf_text+ocr`. Tesseract's base installation uses English; additional OCR languages require language data and configuration.
 
-Local checks have confirmed the three PDF extraction paths, 768-dimensional embeddings and a Qdrant collection configured with cosine comparison. Semantic boundary evaluation and end-to-end integration are still in progress.
+## Ingest and ask locally
+
+With Ollama and Qdrant running, ingest the sample PDF from the repository root:
+
+```bash
+python - <<'PY'
+from pathlib import Path
+from app.services.ingestion_service import ingest_pdf
+
+pdf = Path("examples/parser_sample.pdf")
+report = ingest_pdf(pdf.read_bytes(), pdf.name)
+print(f"Processed {report.pages_processed} pages; stored {report.chunks_created} chunks.")
+PY
+```
+
+Ask a question about the ingested content:
+
+```bash
+python - <<'PY'
+from app.services.answer_service import answer_question
+
+result = answer_question(
+    "How long do I have to return a product?",
+    top_k=3,
+    source_type="pdf",
+)
+print(result.answer)
+print("Retrieved source candidates:")
+for source in result.sources:
+    print(f"- {source.label}")
+PY
+```
+
+The local Qwen client requests non-thinking output and removes inline reasoning sections from the displayed answer. If the model provides no complete final answer, the client raises an error instead of returning that reasoning text.
+
+## Validation and scope
+
+Checks on the supplied English fixture confirmed the three PDF extraction paths, 768-dimensional embeddings, ingestion of six chunks and readback from Qdrant with page metadata. The local answer flow returned the correct returns deadline and OCR-extracted support email with page references, and declined a question about an unspecified CEO. These are small fixture checks; broader document and language evaluation remains in progress. Returned source records describe retrieved candidates and do not certify that every passage was used in the answer.
