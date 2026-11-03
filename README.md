@@ -1,6 +1,6 @@
 # AI Ingestion Engine
 
-A PDF and video ingestion project for retrieving information with references to its source. The current build connects PDF ingestion, semantic search and local question answering with page references.
+A PDF and video ingestion project for retrieving information with references to its source. The current build connects PDF ingestion, semantic search and local question answering with page references, plus connection extraction and Neo4j graph storage.
 
 ## Available modules
 
@@ -11,12 +11,15 @@ A PDF and video ingestion project for retrieving information with references to 
 - **PDF ingestion:** connects extraction, chunking, embeddings and storage while preserving page numbers.
 - **Question search:** embeds a question and retrieves matching passages with source details.
 - **Local question answering:** assembles retrieved context for Ollama `qwen3:4b`, returns the final answer with source records, and requests abstention when the documents do not contain the answer.
+- **Connection extraction:** local Qwen produces subject/predicate/object candidates using a required JSON schema, name cleanup and duplicate removal. Invalid output is rejected before graph loading.
+- **Neo4j storage:** stores extracted connections with file provenance and supports node lookup and traversal across nearby relationships.
+- **HTTP API:** PDF upload, passage search, document lookup and question answering, with an interactive test page at `/docs`.
 
-Video processing, the HTTP API, graph retrieval, meeting notes and n8n workflows remain to be integrated and validated. The video modules currently include OpenAI clients for transcription, vision and synthesis; they are separate from the local PDF path.
+Video processing, graph-assisted answers, community analysis, entity resolution, meeting notes, n8n workflows and Obsidian exchange remain to be integrated and validated. The video modules currently include OpenAI clients for transcription, vision and synthesis; they are separate from the local PDF path. Graph extraction and storage currently run through Python services rather than HTTP routes.
 
 ## Local setup
 
-Requires Python 3.12, Docker, Ollama and Tesseract. On macOS, install the OCR engine with `brew install tesseract`.
+Requires Python 3.12, Docker, Ollama and Tesseract. On macOS, install the OCR engine and additional language data with `brew install tesseract tesseract-lang`.
 
 ```bash
 python3.12 -m venv .venv
@@ -32,9 +35,10 @@ The answer model download is approximately 2.5 GB. Existing local copies can be 
 Start the local services:
 
 ```bash
+printf '%s\n' 'NEO4J_PLUGINS=["graph-data-science"]' > neo4j.env
 docker run -d --name qdrant -p 6333:6333 -p 6334:6334 -v qdrant_storage:/qdrant/storage qdrant/qdrant:latest
 docker run -d --name n8n -p 5678:5678 -v n8n_data:/home/node/.n8n docker.n8n.io/n8nio/n8n:latest
-docker run -d --name neo4j -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/CHANGE_ME --env-file neo4j.env neo4j:5
+docker run -d --name neo4j -p 7474:7474 -p 7687:7687 -v neo4j_data:/data -e NEO4J_AUTH=neo4j/CHANGE_ME --env-file neo4j.env neo4j:5
 ```
 
 Replace `CHANGE_ME` with your local database password and set the same value as `NEO4J_PASSWORD` in `.env`. The example configuration supplies the local addresses and model settings. Keep credentials in `.env`, which is excluded from Git.
@@ -57,7 +61,25 @@ for number, text, method in extract_pdf_pages(path.read_bytes()):
 PY
 ```
 
-The sample exercises `pdf_text`, `ocr` and `pdf_text+ocr`. Tesseract's base installation uses English; additional OCR languages require language data and configuration.
+The sample exercises `pdf_text`, `ocr` and `pdf_text+ocr`. `OCR_LANGUAGES` defaults to `eng+fra+ara` for English, French and Arabic. Confirm these language files are installed with `tesseract --list-langs`; both whole-page and embedded-image OCR use this setting. Recognition quality depends on the scan and page layout.
+
+## HTTP API
+
+With Ollama and Qdrant running, start the API from the repository root:
+
+```bash
+python -m uvicorn app.main:app --reload
+```
+
+Open `http://localhost:8000/docs` to upload a PDF with `POST /ingest/pdf`, then ask questions with `POST /ask`. Include the returned `file_id` to restrict a question to that document. Questions accept a JSON body; PDF uploads use a file form.
+
+| Method | Route | Purpose |
+|---|---|---|
+| `GET` | `/health` | Check the API is running |
+| `POST` | `/ingest/pdf` | Extract, chunk, embed and store a PDF |
+| `POST` | `/search` | Retrieve matching passages and source metadata |
+| `POST` | `/ask` | Answer from retrieved passages with source records |
+| `GET` | `/documents?name=` | List stored files, optionally filtering by part of a filename |
 
 ## Ingest and ask locally
 
@@ -92,8 +114,25 @@ for source in result.sources:
 PY
 ```
 
-The local Qwen client requests non-thinking output and removes inline reasoning sections from the displayed answer. If the model provides no complete final answer, the client raises an error instead of returning that reasoning text.
+## Extract connections and build a graph
 
-## Validation and scope
+With Qdrant, Ollama and Neo4j running, use the `file_id` returned by PDF ingestion:
 
-Checks on the supplied English fixture confirmed the three PDF extraction paths, 768-dimensional embeddings, ingestion of six chunks and readback from Qdrant with page metadata. The local answer flow returned the correct returns deadline and OCR-extracted support email with page references, and declined a question about an unspecified CEO. These are small fixture checks; broader document and language evaluation remains in progress. Returned source records describe retrieved candidates and do not certify that every passage was used in the answer.
+```python
+from app.services.graph_service import build_graph_for_file
+
+report = build_graph_for_file("YOUR_FILE_ID")
+print(report)
+```
+
+The service reads the file's stored text from Qdrant, extracts connections with local Qwen, removes duplicates and saves them to Neo4j. To reuse an existing extraction report, pass it as `extraction=extraction_report` when calling the builder.
+
+The local configuration uses `EXTRACTION_BATCH_CHARS=2000` and `EXTRACTION_TIMEOUT_SECONDS=180` to control text per extraction request and the time allowed for each request.
+
+Graph loading updates relationships belonging to the selected file. The Neo4j browser at `http://localhost:7474` can show them:
+
+```cypher
+MATCH p=(:Entity)-[r:REL]->(:Entity)
+WHERE r.file_id = 'YOUR_FILE_ID'
+RETURN p;
+```

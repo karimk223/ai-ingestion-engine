@@ -14,12 +14,21 @@ import httpx
 from app.config import settings
 
 
-def generate_answer(system_prompt: str, user_prompt: str) -> str:
+def generate_answer(
+    system_prompt: str,
+    user_prompt: str,
+    json_mode: bool = False,
+    json_schema: dict | None = None,
+    timeout_seconds: float | None = None,
+) -> str:
     """
     Ask the LLM to respond to a user_prompt under a given system_prompt.
 
+    json_mode requests JSON text; json_schema supplies its required structure.
+    timeout_seconds overrides the default wait for this request only.
+
     Returns:
-        The plain-text assistant answer (thinking output stripped).
+        The assistant's final text (thinking output stripped).
 
     Raises:
         RuntimeError: if the response is missing the expected content field.
@@ -39,9 +48,25 @@ def generate_answer(system_prompt: str, user_prompt: str) -> str:
         "think": False,
     }
 
-    with httpx.Client(timeout=settings.LLM_TIMEOUT_SECONDS) as client:
+    if json_schema is not None:
+        payload["format"] = json_schema
+    elif json_mode:
+        payload["format"] = "json"
+
+    if json_mode or json_schema is not None:
+        payload["options"] = {"temperature": 0}
+
+    timeout = settings.LLM_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+    with httpx.Client(timeout=timeout) as client:
         response = client.post(url, json=payload)
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise httpx.HTTPStatusError(
+                f"Ollama returned HTTP {response.status_code}: {response.text}",
+                request=exc.request,
+                response=exc.response,
+            ) from exc
         data = response.json()
 
     message = data.get("message", {})

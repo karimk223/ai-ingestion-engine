@@ -46,7 +46,7 @@ def ocr_pdf_page(page: fitz.Page, dpi: int = DEFAULT_DPI) -> str:
     # tobytes("png") gives us in-memory PNG bytes - no temp files on disk.
     img_bytes = pixmap.tobytes("png")
     img = Image.open(io.BytesIO(img_bytes))
-    return pytesseract.image_to_string(img)
+    return pytesseract.image_to_string(img, lang=settings.OCR_LANGUAGES)
 
 
 def ocr_page_images(page: fitz.Page, doc: fitz.Document) -> str:
@@ -81,7 +81,7 @@ def ocr_page_images(page: fitz.Page, doc: fitz.Document) -> str:
 
         try:
             img = Image.open(io.BytesIO(base["image"]))
-            text = pytesseract.image_to_string(img).strip()
+            text = pytesseract.image_to_string(img, lang=settings.OCR_LANGUAGES).strip()
         except Exception:
             continue  # a bad/unsupported image shouldn't break the page
 
