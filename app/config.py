@@ -77,6 +77,15 @@ class Settings:
     LLM_MODEL: str = _require("LLM_MODEL")
     LLM_TIMEOUT_SECONDS: int = int(os.getenv("LLM_TIMEOUT_SECONDS", "120"))
 
+    # Groq: question entity extraction and file translation
+    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+    QUESTION_ENTITY_MODEL: str = os.getenv(
+        "QUESTION_ENTITY_MODEL", "qwen/qwen3.8-27b"
+    )
+    TRANSLATION_MODEL: str = os.getenv("TRANSLATION_MODEL", "qwen/qwen3.8-27b")
+    TRANSLATION_BATCH_CHARS: int = int(os.getenv("TRANSLATION_BATCH_CHARS", "2000"))
+    TRANSLATION_TIMEOUT_SECONDS: int = int(os.getenv("TRANSLATION_TIMEOUT_SECONDS", "180"))
+
     # OCR (Windows needs an explicit tesseract.exe path; on Linux/Mac PATH usually finds it)
     TESSERACT_CMD: str = os.getenv("TESSERACT_CMD", "")
     OCR_LANGUAGES: str = os.getenv("OCR_LANGUAGES", "eng+fra+ara")

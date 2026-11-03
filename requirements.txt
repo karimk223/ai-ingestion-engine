@@ -19,3 +19,6 @@ pillow==12.2.0
 opencv-python==5.0.0.93
 imageio-ffmpeg==0.6.0
 openai==2.45.0
+
+# Offline language detection before graph-text translation.
+lingua-language-detector==2.2.0

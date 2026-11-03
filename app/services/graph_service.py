@@ -65,6 +65,8 @@ def build_graph_for_file(
         "graph_totals": totals,
         "extraction": summary,
     }
+    if "translation" in extraction:
+        report["translation"] = extraction["translation"]
     if reviewed_triples is not None:
         report["review"] = {
             "candidates": len(candidates),

@@ -2,6 +2,7 @@
 import logging
 
 from app.extraction.entity_extractor import extract_triples
+from app.services.translation_service import prepare_segments_for_extraction
 from app.vector_store.qdrant_store import get_chunks_by_file_id
 
 
@@ -30,6 +31,7 @@ def extract_from_file(file_id: str) -> dict:
             c for c in chunks
             if c.get("frame_number") is None and (c.get("text") or "").strip()
         ]
+        source_chunks.sort(key=lambda chunk: chunk.get("chunk_index") or 0)
         mode = "document text"
 
     if not source_chunks:
@@ -44,10 +46,27 @@ def extract_from_file(file_id: str) -> dict:
         len(segments),
         mode,
     )
-    result = extract_triples(segments)
+    prepared = prepare_segments_for_extraction(segments)
+    result = extract_triples(prepared["texts"])
 
     return {
         "file_id": file_id,
         "file_name": file_name,
         **result,
+        "translation": prepared["summary"],
+        "prepared_chunks": [
+            {
+                **chunk,
+                "original_text": chunk["text"],
+                "english_text": english,
+                "source_languages": languages,
+                "translated": translated,
+            }
+            for chunk, english, languages, translated in zip(
+                source_chunks,
+                prepared["texts"],
+                prepared["segment_languages"],
+                prepared["translated"],
+            )
+        ],
     }

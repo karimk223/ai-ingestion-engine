@@ -14,6 +14,7 @@ venv/
 storage/uploads/*
 storage/frames/*
 storage/rendered_pages/*
+storage/translations/
 !storage/uploads/.gitkeep
 !storage/frames/.gitkeep
 !storage/rendered_pages/.gitkeep

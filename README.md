@@ -12,6 +12,8 @@ A PDF and video ingestion project for retrieving information with references to 
 - **Question search:** embeds a question and retrieves matching passages with source details.
 - **Local question answering:** assembles retrieved context for Ollama `qwen3:4b`, returns the final answer with source records, and requests abstention when the documents do not contain the answer.
 - **Connection extraction:** local Qwen produces subject/predicate/object candidates using a required JSON schema, name cleanup and duplicate removal. Invalid output is rejected before graph loading.
+- **Multilingual graph preparation:** checks English, French and Arabic text locally, translates non-English sections to English through Groq, then sends the prepared text to local Qwen for relationship extraction. Original source text and references are preserved.
+- **Question entities:** Groq produces an English version of the question first, then extracts English entity names for graph lookup.
 - **Neo4j storage:** stores extracted connections with file provenance and supports node lookup and traversal across nearby relationships.
 - **HTTP API:** PDF upload, passage search, document lookup and question answering, with an interactive test page at `/docs`.
 
@@ -31,6 +33,8 @@ ollama pull qwen3:4b
 ```
 
 The answer model download is approximately 2.5 GB. Existing local copies can be reused. The PDF path uses local embeddings and local answer generation and does not require a cloud account.
+
+For graph-text translation and question entity extraction, set `GROQ_API_KEY` in `.env`. Both use the configured Groq Qwen model; relationship extraction and ordinary `/ask` answers still use local Ollama. Groq's free-plan limits apply, and availability depends on the account and model.
 
 Start the local services:
 
@@ -125,9 +129,12 @@ report = build_graph_for_file("YOUR_FILE_ID")
 print(report)
 ```
 
-The service reads the file's stored text from Qdrant, extracts connections with local Qwen, removes duplicates and saves them to Neo4j. To reuse an existing extraction report, pass it as `extraction=extraction_report` when calling the builder.
+The service reads all stored source-text sections for the file from Qdrant. English sections pass through unchanged. French and Arabic sections are translated completely into English before local Qwen extracts connections. Long sections are split into translation requests; no source text is truncated. Completed translations are cached under the Git-ignored `storage/translations/` directory so retries can reuse them.
+
+After preparation, the service extracts connections, removes duplicates and saves them to Neo4j. Translation failure stops the build before the existing graph is cleared. To inspect results without writing to Neo4j, call `extract_from_file(file_id)` from `app.services.extraction_service`; its report includes translation counts and the original/English text with source metadata. To reuse an existing extraction report, pass it as `extraction=extraction_report` when calling the builder; this intentionally skips fresh translation and extraction.
 
 The local configuration uses `EXTRACTION_BATCH_CHARS=2000` and `EXTRACTION_TIMEOUT_SECONDS=180` to control text per extraction request and the time allowed for each request.
+`TRANSLATION_BATCH_CHARS=2000` and `TRANSLATION_TIMEOUT_SECONDS=180` separately control translation requests. Translation and relationship extraction use model output, so their factual accuracy must still be checked against the source.
 
 Graph loading updates relationships belonging to the selected file. The Neo4j browser at `http://localhost:7474` can show them:
 
