@@ -77,8 +77,10 @@ class Settings:
     LLM_MODEL: str = _require("LLM_MODEL")
     LLM_TIMEOUT_SECONDS: int = int(os.getenv("LLM_TIMEOUT_SECONDS", "120"))
 
-    # Groq: question entity extraction and file translation
+    # Groq: final answers, question entity extraction and file translation
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+    ANSWER_MODEL: str = os.getenv("ANSWER_MODEL", "qwen/qwen3.8-27b")
+    ANSWER_TIMEOUT_SECONDS: int = int(os.getenv("ANSWER_TIMEOUT_SECONDS", "60"))
     QUESTION_ENTITY_MODEL: str = os.getenv(
         "QUESTION_ENTITY_MODEL", "qwen/qwen3.8-27b"
     )

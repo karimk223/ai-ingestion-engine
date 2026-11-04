@@ -3,9 +3,9 @@ Answer service — the RAG glue.
 
 Steps:
   1. Retrieve top chunks via search_service (semantic search).
-  2. If no chunk clears the confidence threshold → return "not found".
+  2. If no chunk reaches the similarity cutoff → return "not found".
   3. Otherwise, build a prompt with the retrieved chunks as context.
-  4. Call the LLM.
+  4. Ask Groq to write the answer.
   5. Return answer + structured sources for citation.
 
 The system prompt is the anti-hallucination guard: the model is instructed
@@ -13,14 +13,12 @@ to answer ONLY from the provided context and to say "not found" if it can't.
 """
 from dataclasses import dataclass, field
 from app.services.search_service import search_chunks
-from app.llm.llm_client import generate_answer
+from app.llm.groq_client import generate_answer
 
 
-# Minimum cosine similarity for a chunk to count as "relevant."
-# Below this, we treat retrieval as failed and skip the LLM entirely.
-# Based on your Phase 2 tests: relevant queries scored 0.55+, unrelated ~0.37.
-# 0.45 is a defensible middle ground.
-MIN_SCORE_FOR_CONTEXT = 0.45
+# Initial Gemma similarity cutoff, based on our retrieval examples.
+# Drop lower-scoring context before asking the answer model.
+MIN_SCORE_FOR_CONTEXT = 0.25
 
 
 SYSTEM_PROMPT = """You are a precise question-answering assistant for a document search system.
@@ -33,6 +31,8 @@ STRICT RULES:
 5. When citing, refer to the source's page number when available.
 6. If multiple context passages agree, synthesize them; if they disagree, note the disagreement.
 7. Write the answer in the same language as the QUESTION, even when the CONTEXT or these instructions use a different language. A French question requires a French answer; an Arabic question requires an Arabic answer; an English question requires an English answer.
+8. Preserve numeric values and units when reporting amounts or measurements. Copy currency codes and identifiers exactly as written in CONTEXT, including when answering in another language. Use table headings to identify the currency or unit. Never invent or substitute a currency or unit.
+9. When reporting a policy, amount, deadline or entitlement, include any condition in CONTEXT that limits when it applies, even if the QUESTION asks only for the amount or duration. State the qualifying condition in the same sentence as the rule or value. Preserve exceptions, negations and approval status. Never present a conditional statement as an unconditional rule.
 """
 
 
@@ -101,7 +101,7 @@ def answer_question(
     source_type: str | None = None,
 ) -> AnswerResponse:
     """
-    Full RAG: retrieve → check confidence → prompt LLM → return answer + sources.
+    Full RAG: retrieve → filter context → ask Groq → return answer + sources.
     """
     # Guard: empty question
     if not question or not question.strip():
@@ -119,8 +119,13 @@ def answer_question(
         source_type=source_type,
     )
 
-    # 2. Confidence guard — no usable context, refuse to hallucinate
-    if not hits or hits[0]["score"] < MIN_SCORE_FOR_CONTEXT:
+    # 2. Skip generation when no retrieved passage reaches the cutoff.
+    hits = [
+        hit for hit in hits
+        if hit["score"] >= MIN_SCORE_FOR_CONTEXT
+    ]
+
+    if not hits:
         return AnswerResponse(
             question=question,
             answer=NOT_FOUND_MESSAGE,

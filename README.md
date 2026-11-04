@@ -1,23 +1,24 @@
 # AI Ingestion Engine
 
-A PDF and video ingestion project for retrieving information with references to its source. The current build connects PDF ingestion, semantic search and local question answering with page references, plus connection extraction and Neo4j graph storage.
+A PDF and video ingestion project for retrieving information with references to its source. The current build connects PDF ingestion, multilingual semantic search and cited question answering, with optional Neo4j relationships to support GraphRAG answers.
 
 ## Available modules
 
 - **PDF extraction:** selectable text, scanned pages and text inside embedded images, with page numbers and extraction-method labels.
 - **Chunking:** sentence-based semantic splitting with an overlapping size-based fallback.
-- **Embeddings:** local Ollama `nomic-embed-text`, with 768 dimensions checked before use.
+- **Embeddings:** local Ollama `embeddinggemma:300m`, with separate question/document prefixes and 768 dimensions checked before use.
 - **Qdrant storage:** chunk text, embeddings and source metadata; similarity search and file filters.
 - **PDF ingestion:** connects extraction, chunking, embeddings and storage while preserving page numbers.
 - **Question search:** embeds a question and retrieves matching passages with source details.
-- **Local question answering:** assembles retrieved context for Ollama `qwen3:4b`, returns the final answer with source records, and requests abstention when the documents do not contain the answer.
+- **Question answering:** sends retrieved passages to the configured Qwen model through Groq, returns answers with source records, and requests abstention when the documents do not contain the answer. Answers follow the question's language and preserve source amounts, currencies and conditions.
 - **Connection extraction:** local Qwen produces subject/predicate/object candidates using a required JSON schema, name cleanup and duplicate removal. Invalid output is rejected before graph loading.
 - **Multilingual graph preparation:** checks English, French and Arabic text locally, translates non-English sections to English through Groq, then sends the prepared text to local Qwen for relationship extraction. Original source text and references are preserved.
 - **Question entities:** Groq produces an English version of the question first, then extracts English entity names for graph lookup.
 - **Neo4j storage:** stores extracted connections with file provenance and supports node lookup and traversal across nearby relationships.
-- **HTTP API:** PDF upload, passage search, document lookup and question answering, with an interactive test page at `/docs`.
+- **GraphRAG:** combines Qdrant passages with relevant Neo4j connections, preserves source labels and supports an optional file filter across both stores. Graph context can be switched off for passage-only answers.
+- **HTTP API:** PDF upload, passage search, document lookup, ordinary RAG and GraphRAG, with an interactive test page at `/docs`.
 
-Video processing, graph-assisted answers, community analysis, entity resolution, meeting notes, n8n workflows and Obsidian exchange remain to be integrated and validated. The video modules currently include OpenAI clients for transcription, vision and synthesis; they are separate from the local PDF path. Graph extraction and storage currently run through Python services rather than HTTP routes.
+Video processing, community analysis, entity resolution, meeting notes, n8n workflows and Obsidian exchange remain to be integrated and validated. The video modules currently include OpenAI clients for transcription, vision and synthesis; this path is not yet validated end to end. Building a graph from an ingested file currently runs through Python services; graph-assisted answering is available through the HTTP API.
 
 ## Local setup
 
@@ -28,13 +29,13 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
 cp .env.example .env
-ollama pull nomic-embed-text
+ollama pull embeddinggemma:300m
 ollama pull qwen3:4b
 ```
 
-The answer model download is approximately 2.5 GB. Existing local copies can be reused. The PDF path uses local embeddings and local answer generation and does not require a cloud account.
+Existing local model downloads can be reused. Ollama runs Gemma embeddings and Qwen relationship extraction on your machine. Set `GROQ_API_KEY` in `.env` for final answers, question entity extraction and non-English graph-text translation. These requests use the configured Groq Qwen models; usage limits and availability depend on the account and model.
 
-For graph-text translation and question entity extraction, set `GROQ_API_KEY` in `.env`. Both use the configured Groq Qwen model; relationship extraction and ordinary `/ask` answers still use local Ollama. Groq's free-plan limits apply, and availability depends on the account and model.
+The example uses the Qdrant collection `content_chunks_gemma`. If changing from another embedding model, re-embed existing chunks into a separate collection before switching the application. Equal vector dimensions do not make different models' embeddings compatible.
 
 Start the local services:
 
@@ -69,7 +70,7 @@ The sample exercises `pdf_text`, `ocr` and `pdf_text+ocr`. `OCR_LANGUAGES` defau
 
 ## HTTP API
 
-With Ollama and Qdrant running, start the API from the repository root:
+With Ollama and Qdrant running and the Groq key configured, start the API from the repository root. Neo4j must also be running when using graph context:
 
 ```bash
 python -m uvicorn app.main:app --reload
@@ -83,9 +84,13 @@ Open `http://localhost:8000/docs` to upload a PDF with `POST /ingest/pdf`, then 
 | `POST` | `/ingest/pdf` | Extract, chunk, embed and store a PDF |
 | `POST` | `/search` | Retrieve matching passages and source metadata |
 | `POST` | `/ask` | Answer from retrieved passages with source records |
+| `POST` | `/graphrag/ask` | Answer with optional graph context; JSON body |
+| `POST` | `/graphrag/ask-simple` | Same GraphRAG service; URL query parameters |
 | `GET` | `/documents?name=` | List stored files, optionally filtering by part of a filename |
 
-## Ingest and ask locally
+Both GraphRAG routes accept `use_graph` (default `true`), `top_k`, `hops` and an optional `file_id`. Setting `use_graph=false` skips graph retrieval on either route. A supplied file ID restricts both passage and relationship retrieval to that file. Build its graph using the Python service below before expecting graph evidence; PDF ingestion alone stores passages in Qdrant. Source labels help identify evidence, but retrieved facts and generated answers still need checking for relevance.
+
+## Ingest and ask from Python
 
 With Ollama and Qdrant running, ingest the sample PDF from the repository root:
 
@@ -129,7 +134,7 @@ report = build_graph_for_file("YOUR_FILE_ID")
 print(report)
 ```
 
-The service reads all stored source-text sections for the file from Qdrant. English sections pass through unchanged. French and Arabic sections are translated completely into English before local Qwen extracts connections. Long sections are split into translation requests; no source text is truncated. Completed translations are cached under the Git-ignored `storage/translations/` directory so retries can reuse them.
+The service reads all stored source-text sections for the file from Qdrant. English sections pass through unchanged. French and Arabic sections are sent to Groq for English translation before local Qwen extracts connections. Long sections are split into translation requests, and original source text and references are retained. Completed translations are cached under the Git-ignored `storage/translations/` directory so retries can reuse them.
 
 After preparation, the service extracts connections, removes duplicates and saves them to Neo4j. Translation failure stops the build before the existing graph is cleared. To inspect results without writing to Neo4j, call `extract_from_file(file_id)` from `app.services.extraction_service`; its report includes translation counts and the original/English text with source metadata. To reuse an existing extraction report, pass it as `extraction=extraction_report` when calling the builder; this intentionally skips fresh translation and extraction.
 

@@ -109,6 +109,7 @@ def neighborhood_triples(
     entity_names: list[str],
     hops: int = 2,
     limit: int = 60,
+    file_id: str | None = None,
 ) -> list[dict]:
     if not entity_names:
         return []
@@ -119,12 +120,16 @@ def neighborhood_triples(
     MATCH (a:Entity)
     WHERE a.name IN $names
     MATCH path = (a)-[:REL*1..{hops}]-(b:Entity)
+    WHERE $file_id IS NULL
+       OR all(rel IN relationships(path) WHERE rel.file_id = $file_id)
     WITH relationships(path) AS rels
     UNWIND rels AS r
     WITH startNode(r) AS s, r AS r, endNode(r) AS o
     RETURN DISTINCT s.name AS subject,
                     r.predicate AS predicate,
-                    o.name AS object
+                    o.name AS object,
+                    r.file_id AS file_id,
+                    r.file_name AS file_name
     LIMIT $limit
     """
 
@@ -135,6 +140,7 @@ def neighborhood_triples(
             cypher,
             names=entity_names,
             limit=limit,
+            file_id=file_id,
         )
 
         return [
@@ -142,6 +148,8 @@ def neighborhood_triples(
                 "subject": r["subject"],
                 "predicate": r["predicate"],
                 "object": r["object"],
+                "file_id": r["file_id"],
+                "file_name": r["file_name"],
             }
             for r in rows
         ]

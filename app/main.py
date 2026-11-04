@@ -3,6 +3,7 @@ from app.api.routes_ask import router as ask_router
 from app.api.routes_ingest import router as ingest_router
 from app.api.routes_search import router as search_router
 from app.api.routes_document import router as document_router
+from app.api.routes_graphrag import router as graphrag_router
 
 
 app = FastAPI(
@@ -21,3 +22,4 @@ app.include_router(ask_router)
 app.include_router(ingest_router)
 app.include_router(search_router)
 app.include_router(document_router)
+app.include_router(graphrag_router)
