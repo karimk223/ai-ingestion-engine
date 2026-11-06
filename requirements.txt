@@ -15,10 +15,11 @@ PyMuPDF==2.0
 pytesseract==0.3.13
 pillow==12.2.0
 
-# Video decoding, audio extraction and the cloud model client.
+# Video decoding, local speech recognition and the compatible cloud client.
 opencv-python==5.0.0.93
 imageio-ffmpeg==0.6.0
 openai==2.45.0
+openai-whisper==20250625
 
 # Offline language detection before graph-text translation.
 lingua-language-detector==2.2.0

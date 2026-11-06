@@ -2,18 +2,16 @@
 Video frame extractor — the EXTRACT stage for the video source type.
 
 Given a video file path, sample one frame every N seconds and turn each sampled
-frame into text. Primary path: a vision model (gpt-4o-mini) that reads on-screen
-text AND describes the frame's visuals. Fallback: Tesseract OCR (reads text only)
-if the vision call fails or is disabled — so ingestion never breaks.
+frame into text. Gemini reads on-screen text and describes the frame's visuals.
+Tesseract OCR (reads text only) is the fallback if vision fails or is disabled.
 
-Near-duplicate consecutive frames (a slide held on screen for several seconds)
-are skipped, so a slide shown for 10 seconds doesn't produce 10 identical chunks.
+Near-duplicate consecutive descriptions are removed after the vision call.
+This reduces repeated text, not the number of API requests already made.
 
-Rate-limit safety: vision sends a full image per frame, which is token-heavy.
-On a long video that can burst past OpenAI's tokens-per-minute limit. Two guards:
+Vision sends one image per request. Provider quotas still apply:
   - VIDEO_SAMPLE_SECONDS controls how many frames we sample (higher = fewer calls).
-  - LLM_CALL_DELAY_SECONDS adds a small pause between vision calls so the request
-    rate stays under the limit. Set to 0 to disable.
+  - LLM_CALL_DELAY_SECONDS pauses after each response to pace the next request.
+    Set to 0 to disable pacing.
 
 This is the video analogue of pdf_parser.extract_pdf_pages: it hands the shared
 ingestion seam a list of (metadata, text) rows and knows nothing about chunking,
@@ -37,9 +35,8 @@ logger = logging.getLogger(__name__)
 if settings.TESSERACT_CMD:
     pytesseract.pytesseract.tesseract_cmd = settings.TESSERACT_CMD
 
-# Sample a frame every this many seconds, read from config (VIDEO_SAMPLE_SECONDS,
-# default 5). 5s suits slide/meeting videos; lower it for fast-changing content.
-# Near-duplicate frames are dropped below, so over-sampling won't create dupes.
+# VIDEO_SAMPLE_SECONDS sets the video sampling interval; the example uses 5s.
+# Lower intervals capture more moments and require more model requests.
 SAMPLE_EVERY_SECONDS = settings.VIDEO_SAMPLE_SECONDS
 
 # A sampled frame whose text is shorter than this is treated as blank
@@ -95,7 +92,7 @@ def extract_video_frames(video_path: str) -> list[tuple[int, int, str]]:
     # How many raw frames to skip between samples.
     frame_interval = max(1, int(round(fps * SAMPLE_EVERY_SECONDS)))
 
-    # Small pause between vision calls to stay under the OpenAI TPM limit.
+    # Pause after a frame response before sending the next request.
     # Only meaningful when vision is on (OCR is local and free).
     delay = getattr(settings, "LLM_CALL_DELAY_SECONDS", 0) if settings.DESCRIBE_FRAMES else 0
 

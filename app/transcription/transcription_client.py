@@ -1,65 +1,67 @@
-"""
-Transcription client — wraps OpenAI's Whisper API.
+"""Transcribe audio locally and return (start_seconds, text)."""
+from functools import lru_cache
+import subprocess
 
-One job: given an audio file, return the spoken words as a list of timestamped
-segments — (start_seconds, text) — so each piece of speech can become a chunk
-that carries its own timestamp, exactly like the video frame chunks do.
-
-Whisper's `verbose_json` response format gives per-segment start/end times,
-which is what lets a spoken answer cite "clip.mp4 — 04:32" the same way a
-frame OCR chunk does.
-
-Config: OPENAI_API_KEY and WHISPER_MODEL come from settings. If there's no key,
-transcription is skipped (the caller checks settings.TRANSCRIBE_VIDEO first).
-"""
-from openai import OpenAI
+import imageio_ffmpeg
+import numpy as np
+import whisper
 
 from app.config import settings
 
 
+@lru_cache(maxsize=1)
+def _get_model(model_name: str):
+    """Keep the loaded model available for later transcription calls."""
+    return whisper.load_model(model_name, device="cpu")
+
+
 def transcribe_audio(audio_path: str) -> list[tuple[int, str]]:
-    """
-    Transcribe an audio file into timestamped segments.
+    # Prepare the MP3 in the audio format Whisper reads.
+    decoded = subprocess.run(
+        [
+            imageio_ffmpeg.get_ffmpeg_exe(),
+            "-nostdin", "-v", "error",
+            "-i", str(audio_path),
+            "-f", "s16le",
+            "-ac", "1",
+            "-ar", "16000",
+            "-",
+        ],
+        capture_output=True,
+        check=True,
+        timeout=120,
+    )
 
-    Returns:
-        A list of (start_seconds, text) tuples, in order. start_seconds is the
-        whole-second offset where that spoken segment begins. Empty list if the
-        audio produced no usable text.
+    audio = np.frombuffer(decoded.stdout, dtype=np.int16)
+    audio = audio.astype(np.float32) / 32768.0
 
-    Raises:
-        RuntimeError: if the OpenAI API key is missing.
-        openai.OpenAIError: if the Whisper call itself fails.
-    """
-    if not settings.OPENAI_API_KEY:
-        raise RuntimeError(
-            "OPENAI_API_KEY is not set — cannot transcribe. "
-            "Add it to .env, or set TRANSCRIBE_VIDEO=false to skip transcription."
-        )
+    if audio.size == 0:
+        return []
 
-    client = OpenAI(api_key=settings.OPENAI_API_KEY)
+    # Recognize the speech using the local model.
+    model = _get_model(settings.WHISPER_MODEL)
 
-    # verbose_json returns segments with start/end timestamps (plain json does not).
-    with open(audio_path, "rb") as audio_file:
-        result = client.audio.transcriptions.create(
-            model=settings.WHISPER_MODEL,
-            file=audio_file,
-            response_format="verbose_json",
-        )
+    result = model.transcribe(
+        audio,
+        task="transcribe",
+        fp16=False,
+        verbose=False,
+    )
 
-    segments = getattr(result, "segments", None) or []
+    # Keep the same output format our pipeline already expects.
     output: list[tuple[int, str]] = []
-    for seg in segments:
-        # seg may be an object or a dict depending on SDK version — handle both.
-        text = (getattr(seg, "text", None) if not isinstance(seg, dict) else seg.get("text")) or ""
-        start = (getattr(seg, "start", None) if not isinstance(seg, dict) else seg.get("start")) or 0
-        text = text.strip()
-        if text:
-            output.append((int(start), text))
 
-    # Fallback: if no segments came back but there's a top-level text, use it at t=0.
+    for segment in result.get("segments", []):
+        text = segment.get("text", "").strip()
+
+        if text:
+            output.append((int(segment.get("start", 0)), text))
+
+    # If there is text but no separate sections, return it at second zero.
     if not output:
-        whole = (getattr(result, "text", "") or "").strip()
-        if whole:
-            output.append((0, whole))
+        text = result.get("text", "").strip()
+
+        if text:
+            output.append((0, text))
 
     return output

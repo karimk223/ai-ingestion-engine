@@ -51,25 +51,24 @@ class Settings:
     VIDEO_SAMPLE_SECONDS: int = int(os.getenv("VIDEO_SAMPLE_SECONDS", "15"))
     LLM_CALL_DELAY_SECONDS: float = float(os.getenv("LLM_CALL_DELAY_SECONDS", "0.4"))
 
-    # Transcription (OpenAI Whisper) — turn a video's spoken audio into text.
-    # OPENAI_API_KEY is a secret: keep it in .env, never in .env.example or git.
+    # Local Whisper transcribes speech on the CPU without an API key.
+    # OPENAI_API_KEY is reserved for integrations that explicitly use that API.
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-    WHISPER_MODEL: str = os.getenv("WHISPER_MODEL", "whisper-1")
-    # Master switch: if false (or no key), ingestion skips transcription entirely.
+    WHISPER_MODEL: str = os.getenv("WHISPER_MODEL", "base")
+    # Master switch: if false, ingestion skips transcription entirely.
     TRANSCRIBE_VIDEO: bool = os.getenv("TRANSCRIBE_VIDEO", "true").lower() == "true"
 
     # Minutes of Meeting — max characters of transcript per LLM call before the
     # map-reduce path kicks in (~4 chars/token; 12000 chars ~= 3000 tokens input).
     MOM_BATCH_CHARS: int = int(os.getenv("MOM_BATCH_CHARS", "12000"))
 
-    # Vision — describe video frames with a vision model (reads text + describes
-    # visuals). Uses OpenAI gpt-4o-mini (reuses the Whisper key); Qwen on Ollama
-    # Cloud needed a paid subscription and local Qwen was too large.
-    # If DESCRIBE_FRAMES is false, ingestion uses OCR only (the old behavior).
-    VISION_MODEL: str = os.getenv("VISION_MODEL", "gpt-4o-mini")
+    # Gemini describes video frames and combines speech/visual evidence.
+    # If DESCRIBE_FRAMES is false, frame processing uses local OCR only.
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+    VISION_MODEL: str = os.getenv("VISION_MODEL", "gemini-3.5-flash-lite")
     VISION_TIMEOUT_SECONDS: int = int(os.getenv("VISION_TIMEOUT_SECONDS", "120"))
     DESCRIBE_FRAMES: bool = os.getenv("DESCRIBE_FRAMES", "true").lower() == "true"
-    EXTRACTION_MODEL: str = os.getenv("EXTRACTION_MODEL", "gpt-4o-mini")
+    SYNTHESIS_MODEL: str = os.getenv("SYNTHESIS_MODEL", "gemini-3.5-flash-lite")
     EXTRACTION_TIMEOUT_SECONDS: int = int(os.getenv("EXTRACTION_TIMEOUT_SECONDS", "120"))
     EXTRACTION_BATCH_CHARS: int = int(os.getenv("EXTRACTION_BATCH_CHARS", "6000"))
 

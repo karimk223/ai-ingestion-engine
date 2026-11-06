@@ -6,13 +6,13 @@ the video, produced by window_splitter) and writes a clean, grounded Markdown
 narrative of that slice: what was said and what was on screen, woven together in
 time order.
 
-Design decisions (settled with instructor):
+Design decisions:
 - ONE synthesis agent per window (frames are already described upstream by the
   vision model, so no separate frame-agent is needed).
 - Output is flowing NARRATIVE PROSE, not a rigid template. Rigid templates create
   empty slots the model feels obliged to fill, which invites fabrication when a
   window is sparse. Prose lets the model be honest about how little is there.
-- Timestamps are NOT required in the output (per instructor) — natural prose.
+- The output is natural prose; timestamps remain in the upstream events.
 
 Overlap / continuity:
   A window can be cut mid-topic (the boundary is by size, not meaning), so the
@@ -91,51 +91,53 @@ def _format_window_for_prompt(window: Window) -> str:
 
 
 def synthesize_window(window: Window, client=None) -> str:
-    """
-    Produce a grounded Markdown narrative for one window.
-
-    Args:
-        window: a Window from window_splitter (events: speech + frames; optional
-                context: read-only recap of the previous window).
-        client: an OpenAI-compatible client (injected for testing). If None, a
-                real OpenAI client is created from settings.OPENAI_API_KEY.
-
-    Returns:
-        The narrative text for this segment. Empty string if the window has no
-        usable content of its own (context alone does not trigger a narrative —
-        we never describe only the recap).
-
-    Raises:
-        RuntimeError: if no client is given and the OpenAI key is missing.
-    """
-    # Nothing of this window's OWN to say → say nothing. Context alone is not
-    # content (it belongs to the previous window and was already described there).
+    """Combine one window's speech and frame descriptions into a narrative."""
     if not window.events:
         return ""
 
-    if client is None:
-        if not settings.OPENAI_API_KEY:
-            raise RuntimeError(
-                "OPENAI_API_KEY is not set — cannot run synthesis. Add it to .env."
-            )
-        from openai import OpenAI
-        client = OpenAI(api_key=settings.OPENAI_API_KEY)
-
     user_content = _format_window_for_prompt(window)
+    owns_client = client is None
 
-    response = client.chat.completions.create(
-        model=settings.EXTRACTION_MODEL,  # gpt-4o-mini: strong, cheap, good bilingual
-        messages=[
-            {"role": "system", "content": _SYNTHESIS_PROMPT},
-            {"role": "user", "content": user_content},
-        ],
-        temperature=0,  # deterministic, factual — lower creativity = less drift
-        timeout=settings.LLM_TIMEOUT_SECONDS,
-    )
-    text = (response.choices[0].message.content or "").strip() if response.choices else ""
+    if owns_client:
+        if not settings.GEMINI_API_KEY:
+            raise RuntimeError("GEMINI_API_KEY is required for video synthesis.")
+
+        from openai import OpenAI
+        client = OpenAI(
+            api_key=settings.GEMINI_API_KEY,
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+            timeout=settings.LLM_TIMEOUT_SECONDS,
+            max_retries=0,
+        )
+
+    try:
+        response = client.chat.completions.create(
+            model=settings.SYNTHESIS_MODEL,
+            messages=[
+                {"role": "system", "content": _SYNTHESIS_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+            reasoning_effort="minimal",
+            max_tokens=2000,
+            timeout=settings.LLM_TIMEOUT_SECONDS,
+        )
+    finally:
+        if owns_client:
+            client.close()
+
+    if not response.choices:
+        raise RuntimeError("Gemini returned no narrative.")
+
+    choice = response.choices[0]
+    text = (choice.message.content or "").strip()
+
+    if choice.finish_reason != "stop" or not text:
+        raise RuntimeError("Gemini did not return a complete narrative.")
+
     logger.info(
         "Synthesized window %d [%ds-%ds]: %d speech + %d frames (+%d recap) -> %d chars",
         window.index, window.start_seconds, window.end_seconds,
         len(window.speech_events), len(window.frame_events), len(window.context), len(text),
     )
+
     return text

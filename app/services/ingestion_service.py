@@ -200,7 +200,7 @@ def ingest_video(video_path: str, file_name: str) -> VideoIngestionReport:
 
     Rate-limit safety lives upstream: VIDEO_SAMPLE_SECONDS controls how many
     frames are described, and LLM_CALL_DELAY_SECONDS paces the vision + synthesis
-    calls so a long video doesn't exceed OpenAI's tokens-per-minute limit.
+    calls. Provider request, token and daily quotas still apply.
     """
     ensure_collection()
 
@@ -214,7 +214,7 @@ def ingest_video(video_path: str, file_name: str) -> VideoIngestionReport:
 
     # Step 1b: transcript -> (start_seconds, text)
     transcript: list[tuple[int, str]] = []
-    if settings.TRANSCRIBE_VIDEO and settings.OPENAI_API_KEY:
+    if settings.TRANSCRIBE_VIDEO:
         try:
             audio_path = extract_audio(video_path)
             if audio_path is None:
@@ -228,8 +228,7 @@ def ingest_video(video_path: str, file_name: str) -> VideoIngestionReport:
                     Path(audio_path).unlink(missing_ok=True)
         except Exception as exc:  # best-effort; never fail ingest on transcription
             logger.warning("Transcription failed for '%s': %s", file_name, exc)
-    elif settings.TRANSCRIBE_VIDEO and not settings.OPENAI_API_KEY:
-        logger.info("TRANSCRIBE_VIDEO is on but no OPENAI_API_KEY - skipping transcription")
+
 
     # Step 2: assemble the long document (windows -> synthesize -> stitch)
     assembly = assemble_document(

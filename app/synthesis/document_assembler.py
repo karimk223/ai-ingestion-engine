@@ -12,9 +12,8 @@ the entire video, which downstream steps chunk, embed, and graph (replacing the
 old raw-chunk approach).
 
 Windows are synthesized SEQUENTIALLY, with a small configurable pause between
-calls (settings.LLM_CALL_DELAY_SECONDS). Sequential + paced keeps the request
-rate under OpenAI's tokens-per-minute limit, so a long video doesn't 429-storm.
-Set the delay to 0 to disable pacing.
+calls (settings.LLM_CALL_DELAY_SECONDS) to pace Gemini requests. Request, token
+and daily quotas still apply. Set the delay to 0 to disable pacing.
 
 The LLM client is injected so the whole assembly is unit-testable with a fake.
 """
@@ -78,7 +77,7 @@ def assemble_document(
 
     sections: list[str] = [title]
     written = 0
-    # Small pause between synthesis calls to stay under the OpenAI TPM limit.
+    # Configured pause between real synthesis requests.
     delay = getattr(settings, "LLM_CALL_DELAY_SECONDS", 0)
 
     for i, window in enumerate(windows):
