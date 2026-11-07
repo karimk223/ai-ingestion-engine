@@ -17,9 +17,9 @@ A PDF and video ingestion system for searching source content and answering ques
 - **Question entities:** Groq produces an English version of the question first, then extracts English entity names for graph lookup.
 - **Neo4j storage:** stores extracted connections with file provenance and supports node lookup and traversal across nearby relationships.
 - **GraphRAG:** combines Qdrant passages with relevant Neo4j connections, preserves source labels and supports an optional file filter across both stores. Graph context can be switched off for passage-only answers.
-- **HTTP API:** PDF and video upload, passage search, document lookup, ordinary RAG and GraphRAG, with an interactive test page at `/docs`.
+- **HTTP API:** PDF and video upload, passage search, document lookup, connection previews, graph building and statistics, ordinary RAG and GraphRAG, with an interactive test page at `/docs`.
 
-Community analysis, entity resolution, meeting notes, n8n workflows and Obsidian exchange remain to be integrated and validated. Building a graph from an ingested file currently runs through Python services; graph-assisted answering is available through the HTTP API.
+Community analysis, entity resolution, meeting notes, n8n workflows and Obsidian exchange remain to be integrated and validated.
 
 ## Local setup
 
@@ -98,11 +98,14 @@ Open `http://localhost:8000/docs` to upload a PDF with `POST /ingest/pdf` or a v
 | `POST` | `/ingest/video` | Process speech and frames, synthesize, chunk, embed and store a video |
 | `POST` | `/search` | Retrieve matching passages and source metadata |
 | `POST` | `/ask` | Answer from retrieved passages with source records |
+| `POST` | `/extract/{file_id}` | Preview extracted connections without writing to Neo4j |
+| `POST` | `/graph/build/{file_id}` | Extract connections for a stored file and save them to Neo4j |
+| `GET` | `/graph/stats` | Count nodes and relationships across the whole graph |
 | `POST` | `/graphrag/ask` | Answer with optional graph context; JSON body |
 | `POST` | `/graphrag/ask-simple` | Same GraphRAG service; URL query parameters |
 | `GET` | `/documents?name=` | List stored files, optionally filtering by part of a filename |
 
-Both GraphRAG routes accept `use_graph` (default `true`), `top_k`, `hops` and an optional `file_id`. Setting `use_graph=false` skips graph retrieval on either route. A supplied file ID restricts both passage and relationship retrieval to that file. Build its graph using the Python service below before expecting graph evidence; PDF and video ingestion store passages in Qdrant, while graph extraction and storage are separate steps. Source labels help identify evidence, but retrieved facts and generated answers still need checking for relevance.
+Both GraphRAG routes accept `use_graph` (default `true`), `top_k`, `hops` and an optional `file_id`. Setting `use_graph=false` skips graph retrieval on either route. A supplied file ID restricts both passage and relationship retrieval to that file. Build its graph with `POST /graph/build/{file_id}` or the Python service below before expecting graph evidence; PDF and video ingestion store passages in Qdrant, while graph extraction and storage are separate steps. Source labels help identify evidence, but retrieved facts and generated answers still need checking for relevance.
 
 ## Ingest and ask from Python
 
@@ -139,7 +142,9 @@ PY
 
 ## Extract connections and build a graph
 
-With Qdrant, Ollama and Neo4j running, use the `file_id` returned by PDF or video ingestion:
+Use the `file_id` returned by PDF or video ingestion. In `/docs`, `POST /extract/{file_id}` provides an optional preview without saving to Neo4j. `POST /graph/build/{file_id}` performs extraction and saves the result; a preview is not required. `GET /graph/stats` shows whole-graph totals. The English CRM video has been checked through extraction, graph building and a file-scoped GraphRAG answer.
+
+With Qdrant, Ollama and Neo4j running and the Groq key configured, the same build is available from Python:
 
 ```python
 from app.services.graph_service import build_graph_for_file
