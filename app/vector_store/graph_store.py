@@ -105,6 +105,55 @@ def find_entities(names: list[str]) -> list[str]:
         return [r["name"] for r in rows]
 
 
+def list_entity_names() -> list[str]:
+    """Return every entity name currently in the graph."""
+    driver = get_driver()
+    with driver.session() as session:
+        rows = session.run("MATCH (e:Entity) RETURN e.name AS name ORDER BY e.name")
+        return [r["name"] for r in rows]
+
+
+def merge_entities(from_name: str, into_name: str) -> None:
+    """Move a duplicate's relationships to the entity we want to keep."""
+    if from_name == into_name:
+        return
+
+    params = {"from": from_name, "into": into_name}
+
+    with get_driver().session() as session:
+        with session.begin_transaction() as tx:
+            tx.run(
+                """
+                MATCH (f:Entity {name: $from})-[r:REL]->(x:Entity)
+                MATCH (t:Entity {name: $into})
+                WHERE x <> t
+                MERGE (t)-[nr:REL {predicate: r.predicate, file_id: r.file_id}]->(x)
+                SET nr.file_name = r.file_name
+                """,
+                params,
+            ).consume()
+
+            tx.run(
+                """
+                MATCH (y:Entity)-[r:REL]->(f:Entity {name: $from})
+                MATCH (t:Entity {name: $into})
+                WHERE y <> t
+                MERGE (y)-[nr:REL {predicate: r.predicate, file_id: r.file_id}]->(t)
+                SET nr.file_name = r.file_name
+                """,
+                params,
+            ).consume()
+
+            tx.run(
+                """
+                MATCH (f:Entity {name: $from}), (:Entity {name: $into})
+                DETACH DELETE f
+                """,
+                params,
+            ).consume()
+
+            tx.commit()
+
 def neighborhood_triples(
     entity_names: list[str],
     hops: int = 2,
@@ -153,3 +202,52 @@ def neighborhood_triples(
             }
             for r in rows
         ]
+
+
+def detect_communities() -> list[dict]:
+    """Group related entities and return the relationships inside each group."""
+    graph_name = "ingestion_engine_communities"
+
+    with get_driver().session() as session:
+        session.run(
+            """
+            CALL gds.graph.project(
+                $name,
+                'Entity',
+                {REL: {orientation: 'UNDIRECTED'}}
+            )
+            """,
+            name=graph_name,
+        ).consume()
+
+        try:
+            session.run(
+                "CALL gds.louvain.write($name, {writeProperty: 'community'})",
+                name=graph_name,
+            ).consume()
+
+            communities = session.run("""
+                MATCH (e:Entity)
+                WHERE e.community IS NOT NULL
+                RETURN e.community AS community, collect(e.name) AS entities
+                ORDER BY size(entities) DESC
+            """).data()
+
+            for group in communities:
+                group["triples"] = session.run(
+                    """
+                    MATCH (s:Entity)-[r:REL]->(o:Entity)
+                    WHERE s.name IN $names AND o.name IN $names
+                    RETURN DISTINCT s.name AS subject,
+                                    r.predicate AS predicate,
+                                    o.name AS object
+                    """,
+                    names=group["entities"],
+                ).data()
+
+            return communities
+        finally:
+            session.run(
+                "CALL gds.graph.drop($name) YIELD graphName RETURN graphName",
+                name=graph_name,
+            ).consume()

@@ -52,7 +52,10 @@ def _ocr_frame(frame_bgr) -> str:
     """Fallback: read on-screen text from a frame with Tesseract."""
     rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
     image = Image.fromarray(rgb)
-    return pytesseract.image_to_string(image).strip()
+    return pytesseract.image_to_string(
+        image,
+        lang=settings.OCR_LANGUAGES,
+    ).strip()
 
 
 def _understand_frame(frame_bgr) -> str:

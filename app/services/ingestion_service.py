@@ -183,7 +183,9 @@ def ingest_pdf(pdf_bytes: bytes, file_name: str) -> IngestionReport:
     )
 
 
-def ingest_video(video_path: str, file_name: str) -> VideoIngestionReport:
+def ingest_video(
+    video_path: str, file_name: str, *, mixed_language: bool = False
+) -> VideoIngestionReport:
     """
     Video ingestion via multi-agent synthesis.
 
@@ -216,17 +218,17 @@ def ingest_video(video_path: str, file_name: str) -> VideoIngestionReport:
     transcript: list[tuple[int, str]] = []
     if settings.TRANSCRIBE_VIDEO:
         try:
-            audio_path = extract_audio(video_path)
-            if audio_path is None:
-                logger.info("No audio track in '%s' - skipping transcription", file_name)
+            if mixed_language:
+                transcript = transcribe_audio(video_path, mixed_language=True)
             else:
-                try:
-                    transcript = transcribe_audio(audio_path)
-                    logger.info("Transcribed %d segments from '%s'",
-                                len(transcript), file_name)
-                finally:
-                    Path(audio_path).unlink(missing_ok=True)
-        except Exception as exc:  # best-effort; never fail ingest on transcription
+                audio_path = extract_audio(video_path)
+                if audio_path is not None:
+                    try:
+                        transcript = transcribe_audio(audio_path)
+                    finally:
+                        Path(audio_path).unlink(missing_ok=True)
+            logger.info("Transcribed %d segments from '%s'", len(transcript), file_name)
+        except Exception as exc:
             logger.warning("Transcription failed for '%s': %s", file_name, exc)
 
 

@@ -35,6 +35,10 @@ import logging
 from app.config import settings
 from app.synthesis.window_splitter import Window
 
+from openai import APIStatusError
+
+from app.llm.groq_client import generate_answer
+
 logger = logging.getLogger(__name__)
 
 
@@ -120,6 +124,15 @@ def synthesize_window(window: Window, client=None) -> str:
             reasoning_effort="minimal",
             max_tokens=2000,
             timeout=settings.LLM_TIMEOUT_SECONDS,
+        )
+    except APIStatusError as exc:
+        if not owns_client or exc.status_code != 503:
+            raise
+
+        logger.warning("Gemini unavailable for window %d. Using Groq.", window.index)
+        return generate_answer(
+            system_prompt=_SYNTHESIS_PROMPT,
+            user_prompt=user_content,
         )
     finally:
         if owns_client:

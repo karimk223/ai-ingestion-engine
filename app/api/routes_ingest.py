@@ -68,7 +68,9 @@ async def ingest_pdf_endpoint(file: UploadFile = File(...)):
     return asdict(report)
 
 @router.post("/video", status_code=status.HTTP_201_CREATED)
-async def ingest_video_endpoint(file: UploadFile = File(...)):
+async def ingest_video_endpoint(
+    file: UploadFile = File(...), mixed_language: bool = False
+):
     # Check that the uploaded file has a supported video extension.
     if not file.filename or not file.filename.lower().endswith(ALLOWED_VIDEO_EXT):
         raise HTTPException(
@@ -111,6 +113,7 @@ async def ingest_video_endpoint(file: UploadFile = File(...)):
             ingest_video,
             str(video_path),
             file_name=Path(file.filename).name,
+            mixed_language=mixed_language,
         )
 
         return asdict(report)
