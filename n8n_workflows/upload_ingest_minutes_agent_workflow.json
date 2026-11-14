@@ -1,0 +1,541 @@
+{
+  "name": "AI Ingestion Engine — Upload & Ingest",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Upload a Document or Video",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "File",
+              "fieldType": "file",
+              "fieldName": "File",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        112,
+        -32
+      ],
+      "id": "f65b0c87-7380-43b2-9267-2183459e32dc",
+      "name": "On form submission",
+      "webhookId": "83d13d26-ab3f-4134-ac63-6dd93ba3d983"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://host.docker.internal:8000/ingest/{{ $binary.File.fileName.toLowerCase().endsWith('.pdf') ? 'pdf' : 'video' }}",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "File"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 600000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        416,
+        -32
+      ],
+      "id": "d67e1c2c-7654-41c6-a453-7053d509b077",
+      "name": "Ingest file"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 4
+          },
+          "conditions": [
+            {
+              "id": "497d7b4b-6e34-4d1b-bf03-7e61246ebe5e",
+              "leftValue": "={{ $json.source_type }}",
+              "rightValue": "video",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.4,
+      "position": [
+        800,
+        -32
+      ],
+      "id": "f104fca2-5884-4e93-ab4b-a7e25b79549c",
+      "name": "Is it a video?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://host.docker.internal:8000/minutes/{{ $json.file_id }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1088,
+        -80
+      ],
+      "id": "598bc63f-ccf1-4549-878f-0c438df6deaf",
+      "name": "Generate minutes"
+    },
+    {
+      "parameters": {
+        "sendTo": "you@example.com",
+        "subject": "=Minutes of Meeting - {{ $json.file_name }}",
+        "emailType": "text",
+        "message": "={{ $json.minutes }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1296,
+        -80
+      ],
+      "id": "50a12d4f-eb11-4916-aabf-ea1f18c8af89",
+      "name": "Send a message",
+      "webhookId": "3626e01c-b5b2-4cc1-9d95-10ddd8a37f0a"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.5,
+      "position": [
+        0,
+        208
+      ],
+      "id": "df21e0ce-ebae-4bb4-8c50-fc02fcca3872",
+      "name": "When chat message received",
+      "webhookId": "433a58f3-a231-44e8-b396-548cc22665f3"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        224,
+        208
+      ],
+      "id": "15e0e522-8bb9-4e70-a520-f5273707ce04",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": "qwen/qwen3.8-27b",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        160,
+        400
+      ],
+      "id": "147729a3-c718-40ec-b4da-63e62cb93e35",
+      "name": "Groq Chat Model"
+    },
+    {
+      "parameters": {
+        "toolDescription": "Use this tool to answer questions about relationships, dependencies, or workflow steps in the ingested files.",
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/graphrag/ask-simple",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "question",
+              "value": "={{ $fromAI('question', 'The user’s question about the ingested files', 'string') }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.5,
+      "position": [
+        880,
+        336
+      ],
+      "id": "68ec9ace-d592-4467-88ea-c18f888e35b6",
+      "name": "ask_knowledge_graph"
+    },
+    {
+      "parameters": {
+        "contextWindowLength": 10
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.4,
+      "position": [
+        288,
+        464
+      ],
+      "id": "05757da2-8a1a-4eb2-a71e-a2d113f3c2b7",
+      "name": "Simple Memory"
+    },
+    {
+      "parameters": {
+        "toolDescription": "Use this tool for broad questions about the main themes or topics in the ingested files.",
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/graph/communities?min_size=3",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.5,
+      "position": [
+        752,
+        400
+      ],
+      "id": "31e8b52f-a6df-43f1-ad67-9b23c8e47f04",
+      "name": "get_theme_summaries"
+    },
+    {
+      "parameters": {
+        "toolDescription": "Find relevant passages and their sources in ingested PDFs and videos. Use for factual lookup and finding exact wording.",
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/search",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "={{ $fromAI('query', 'The words or meaning to search for in the ingested files', 'string') }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.5,
+      "position": [
+        544,
+        400
+      ],
+      "id": "fda7a078-9125-42a7-9717-bfad5e54f508",
+      "name": "search_knowledge_base"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "email-minutes",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        -16,
+        672
+      ],
+      "id": "77162151-ff9f-49d5-b20b-6e42b605c9ed",
+      "name": "Email Minutes Webhook",
+      "webhookId": "29acc306-36b3-46cc-a359-1c71616f3fcb"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/minutes/by-name",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "name",
+              "value": "={{ $json.query.name }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        208,
+        672
+      ],
+      "id": "77fc41fc-f9c3-4979-93f2-e652b0851c4d",
+      "name": "Minutes (for agent email)"
+    },
+    {
+      "parameters": {
+        "sendTo": "you@example.com",
+        "subject": "=Minutes of Meeting - {{ $json.file_name }}",
+        "emailType": "text",
+        "message": "={{ $json.minutes }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        432,
+        672
+      ],
+      "id": "712e8f7d-4a70-4332-9151-75b8b8979344",
+      "name": "Email minutes (agent)",
+      "webhookId": "61dceeb4-a85a-4ed2-ab04-8d351dbb5903"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { response: $('Minutes (for agent email)').first().json.minutes } }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        656,
+        672
+      ],
+      "id": "c8d0eb1b-dfa2-4a90-a969-9e5e0cffc9f1",
+      "name": "Respond to agent"
+    },
+    {
+      "parameters": {
+        "toolDescription": "Use when the user explicitly asks to email meeting minutes for an ingested video. Takes a filename, sends the minutes to the configured inbox, and returns the minutes text.",
+        "method": "POST",
+        "url": "http://host.docker.internal:5678/webhook/email-minutes",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "name",
+              "value": "={{ $fromAI('name', 'The filename of the ingested video', 'string') }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.5,
+      "position": [
+        400,
+        416
+      ],
+      "id": "f5db9c4f-a0c8-4b08-9694-56a99af1be7f",
+      "name": "get_meeting_minutes"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://host.docker.internal:8000/graph/build/{{ $json.file_id }}",
+        "options": {
+          "timeout": 600000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        800,
+        144
+      ],
+      "id": "6ae00838-aa50-4e50-96d8-d625b0d6d8cc",
+      "name": "Build graph",
+      "onError": "continueErrorOutput"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "On form submission": {
+      "main": [
+        [
+          {
+            "node": "Ingest file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ingest file": {
+      "main": [
+        [
+          {
+            "node": "Build graph",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Is it a video?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is it a video?": {
+      "main": [
+        [
+          {
+            "node": "Generate minutes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate minutes": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ask_knowledge_graph": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "get_theme_summaries": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "search_knowledge_base": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Minutes Webhook": {
+      "main": [
+        [
+          {
+            "node": "Minutes (for agent email)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Minutes (for agent email)": {
+      "main": [
+        [
+          {
+            "node": "Email minutes (agent)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email minutes (agent)": {
+      "main": [
+        [
+          {
+            "node": "Respond to agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "get_meeting_minutes": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build graph": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "984e3d96-f850-4c70-95a5-97c2053f4ce8",
+  "nodeGroups": [],
+  "id": "UeEb3KDNnkKRaGYf",
+  "tags": []
+}

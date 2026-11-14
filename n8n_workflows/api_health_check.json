@@ -1,0 +1,56 @@
+{
+  "name": "AI Ingestion Engine — API Health Check",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "fc7e100b-9c97-41b7-a775-2280c4412fae",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "url": "http://host.docker.internal:8000/health",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        224,
+        0
+      ],
+      "id": "0813b5bb-ceb3-4c33-8fac-9b8bd7540cc6",
+      "name": "HTTP Request"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "ce7ef47e-d302-46ea-8fe1-65d34c9865bd",
+  "meta": {
+    "instanceId": "93f3fd0ac113e88e8e011066d98daf35978230c6797b84213d91ad36864b1a0a"
+  },
+  "nodeGroups": [],
+  "id": "NOTpZBRvF7WSdnz2",
+  "tags": []
+}
