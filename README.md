@@ -1,6 +1,6 @@
 # AI Ingestion Engine
 
-A PDF and video ingestion system for searching source content and answering questions with source references. It combines document extraction, video speech and visual processing, multilingual semantic retrieval and optional Neo4j graph context.
+A FastAPI service that makes PDFs and videos searchable and answers questions with source references. It combines OCR, speech transcription, multilingual semantic search and optional Neo4j graph context. The included n8n workflows automate uploads, graph building and meeting-minutes delivery, and provide a chat interface for the knowledge base.
 
 ## Available modules
 
@@ -17,9 +17,10 @@ A PDF and video ingestion system for searching source content and answering ques
 - **Question entities:** Groq produces an English version of the question first, then extracts English entity names for graph lookup.
 - **Neo4j storage:** stores extracted connections with file provenance and supports node lookup and traversal across nearby relationships.
 - **GraphRAG:** combines Qdrant passages with relevant Neo4j connections, preserves source labels and supports an optional file filter across both stores. Graph context can be switched off for passage-only answers.
-- **HTTP API:** PDF and video upload, passage search, document lookup, connection previews, graph building and statistics, ordinary RAG and GraphRAG, with an interactive test page at `/docs`.
-
-Community analysis, entity resolution, meeting notes, n8n workflows and Obsidian exchange remain to be integrated and validated.
+- **Entity resolution:** previews likely duplicate names across the graph and can merge them while preserving relationship direction and source file references.
+- **Community summaries:** groups related entities with Neo4j Graph Data Science and uses Groq to summarize each eligible group from its relationships and relevant passages.
+- **Meeting minutes:** generates structured minutes from a stored video, using a single pass or summarizing batches before combining them.
+- **n8n:** provides a form, a direct upload webhook, a chat workflow and a manual API health check.
 
 ## Local setup
 
@@ -34,62 +35,65 @@ ollama pull embeddinggemma:300m
 ollama pull qwen3:4b
 ```
 
-Existing local model downloads can be reused. Ollama runs Gemma embeddings and Qwen relationship extraction on your machine. Set `GROQ_API_KEY` in `.env` for final answers, question entity extraction and non-English graph-text translation. These requests use the configured Groq Qwen models; usage limits and availability depend on the account and model.
+Start Ollama if it is not already running. It hosts Gemma embeddings and local Qwen relationship extraction. Set `GROQ_API_KEY` in `.env` for answers, question entity extraction, graph-text translation, entity resolution, community summaries and meeting minutes.
 
-For video ingestion, set `GEMINI_API_KEY` in `.env`. Gemini handles frame descriptions and speech/visual synthesis. Whisper runs locally on the CPU; the configured `base` model downloads on first use. Audio decoding uses the FFmpeg binary bundled with `imageio-ffmpeg`. The video path does not require an OpenAI API key.
+For video ingestion, set `GEMINI_API_KEY` in `.env`. Gemini describes frames and combines the speech and visual evidence. Frame description failures fall back to local OCR. If Gemini returns HTTP 503 during synthesis, the API uses Groq for that synthesis request. Whisper runs on the CPU and downloads the selected model on first use. Audio decoding uses the FFmpeg binary bundled with `imageio-ffmpeg`.
 
 The example uses the Qdrant collection `content_chunks_gemma`. If changing from another embedding model, re-embed existing chunks into a separate collection before switching the application. Equal vector dimensions do not make different models' embeddings compatible.
 
-Start the local services:
+Start the local services. Neo4j is needed for graph features and n8n is needed for the workflows.
 
 ```bash
-printf '%s\n' 'NEO4J_PLUGINS=["graph-data-science"]' > neo4j.env
 docker run -d --name qdrant -p 6333:6333 -p 6334:6334 -v qdrant_storage:/qdrant/storage qdrant/qdrant:latest
 docker run -d --name n8n -p 5678:5678 -v n8n_data:/home/node/.n8n docker.n8n.io/n8nio/n8n:latest
-docker run -d --name neo4j -p 7474:7474 -p 7687:7687 -v neo4j_data:/data -e NEO4J_AUTH=neo4j/CHANGE_ME --env-file neo4j.env neo4j:5
+docker run -d --name neo4j -p 7474:7474 -p 7687:7687 -v neo4j_data:/data \
+  -e NEO4J_AUTH=neo4j/CHANGE_ME \
+  -e 'NEO4J_PLUGINS=["graph-data-science"]' neo4j:5
 ```
 
 Replace `CHANGE_ME` with your local database password and set the same value as `NEO4J_PASSWORD` in `.env`. The example configuration supplies the local addresses and model settings. Keep credentials in `.env`, which is excluded from Git.
 
 For existing containers, use `docker start qdrant n8n neo4j` instead of creating them again.
 
-## PDF example
+## Inspect text extraction from a PDF
 
-`examples/parser_sample.pdf` contains three fictional pages: selectable text, a scanned page and a text page with an embedded image. Run from the repository root:
+From the repository root, replace `path/to/your-document.pdf` with the path to a PDF you want to inspect.
 
 ```bash
-python - <<'PY'
+python - "path/to/your-document.pdf" <<'PY'
+import sys
 from pathlib import Path
+
 from app.parsers.pdf_parser import extract_pdf_pages
 
-path = Path("examples/parser_sample.pdf")
+path = Path(sys.argv[1])
 for number, text, method in extract_pdf_pages(path.read_bytes()):
     print(f"\n--- Page {number} | {method} ---")
     print(text.strip())
 PY
 ```
 
-The sample exercises `pdf_text`, `ocr` and `pdf_text+ocr`. `OCR_LANGUAGES` defaults to `eng+fra+ara` for English, French and Arabic. Confirm these language files are installed with `tesseract --list-langs`; both whole-page and embedded-image OCR use this setting. Recognition quality depends on the scan and page layout.
+The reported method tells you where the text came from. `pdf_text` means text was read directly from the page, `ocr` means it was recognized from the scanned page, and `pdf_text+ocr` combines page text with text recognized from embedded images. `OCR_LANGUAGES` defaults to `eng+fra+ara` for English, French and Arabic. Use `tesseract --list-langs` to check the installed language data.
 
 ## Video ingestion
 
 Upload a video through `POST /ingest/video` in `/docs`. The endpoint accepts `.mp4`, `.mov`, `.avi`, `.mkv` and `.webm` files up to 200 MB and returns its `file_id`, retained frame count, transcript segment count and stored chunk count.
 
-`VIDEO_SAMPLE_SECONDS=5` samples one image every five seconds of video. `LLM_CALL_DELAY_SECONDS=5` pauses after each frame-description response and between synthesis calls. These settings control coverage and request pacing; provider quotas still apply. Near-identical descriptions are removed after the vision call.
+For a recording that switches languages, set `mixed_language=true` in Swagger or call `POST /ingest/video?mixed_language=true`. FFmpeg decodes the audio and detects pauses of at least one second. The service splits the audio at eligible pauses and uses Whisper `small` to detect the language and transcribe each part separately. The regular upload uses the configured `WHISPER_MODEL`, which defaults to `base`.
 
-Frame descriptions and timestamped speech are grouped into windows and synthesized into one Markdown document before indexing. Final chunks cite the video filename; they do not retain per-moment timestamps. Transcription failures and vision-to-OCR fallbacks are logged, so inspect warnings and response counts when checking an upload.
+The example configuration samples frames every five seconds and paces model calls with `LLM_CALL_DELAY_SECONDS`. With `DESCRIBE_FRAMES=false`, frame processing uses local OCR to read visible text. Synthesis groups the frame descriptions and timestamped speech into windows and combines them into one Markdown document before indexing. The resulting text chunks cite the video filename. Transcription failures and vision fallbacks are logged.
 
-The complete upload-to-answer flow has been checked with an English CRM walkthrough. Arabic and French video speech, mixed-language video input and cross-language video answers still need separate validation.
+The upload-to-answer flow was tested with English and French Odoo CRM clips and a recording with both English and French speech.
 
 ## HTTP API
 
-With Ollama and Qdrant running and the Groq key configured, start the API from the repository root. Neo4j must also be running when using graph context:
+With Ollama and Qdrant running and the Groq key configured, start the API from the repository root. Neo4j must also be running when using graph context.
 
 ```bash
 python -m uvicorn app.main:app --reload
 ```
 
-Open `http://localhost:8000/docs` to upload a PDF with `POST /ingest/pdf` or a video with `POST /ingest/video`, then ask questions with `POST /ask`. Include the returned `file_id` to restrict the search to that file. Questions accept a JSON body; uploads use a file form. Restart the API after changing `.env` settings.
+Open [Swagger UI](http://localhost:8000/docs) to upload a PDF with `POST /ingest/pdf` or a video with `POST /ingest/video`, then ask questions with `POST /ask`. Include the returned `file_id` to restrict retrieval to that file. `/ask` accepts a JSON body and uploads use multipart form data. Restart the API after changing `.env` settings.
 
 | Method | Route | Purpose |
 |---|---|---|
@@ -101,36 +105,36 @@ Open `http://localhost:8000/docs` to upload a PDF with `POST /ingest/pdf` or a v
 | `POST` | `/extract/{file_id}` | Preview extracted connections without writing to Neo4j |
 | `POST` | `/graph/build/{file_id}` | Extract connections for a stored file and save them to Neo4j |
 | `GET` | `/graph/stats` | Count nodes and relationships across the whole graph |
+| `POST` | `/graph/resolve-entities?apply=false` | Preview suggested duplicate merges across the graph |
+| `POST` | `/graph/communities?min_size=2` | Detect communities and summarize groups that meet the size threshold |
 | `POST` | `/graphrag/ask` | Answer with optional graph context; JSON body |
 | `POST` | `/graphrag/ask-simple` | Same GraphRAG service; URL query parameters |
 | `GET` | `/documents?name=` | List stored files, optionally filtering by part of a filename |
+| `POST` | `/minutes/{file_id}` | Generate minutes for an ingested video by ID |
+| `POST` | `/minutes/by-name?name=` | Find one ingested video by filename and generate its minutes |
 
 Both GraphRAG routes accept `use_graph` (default `true`), `top_k`, `hops` and an optional `file_id`. Setting `use_graph=false` skips graph retrieval on either route. A supplied file ID restricts both passage and relationship retrieval to that file. Build its graph with `POST /graph/build/{file_id}` or the Python service below before expecting graph evidence; PDF and video ingestion store passages in Qdrant, while graph extraction and storage are separate steps. Source labels help identify evidence, but retrieved facts and generated answers still need checking for relevance.
 
 ## Ingest and ask from Python
 
-With Ollama and Qdrant running, ingest the sample PDF from the repository root:
+With Ollama and Qdrant running, pass your PDF path and a question about that document. The answer uses the upload's returned file ID to find passages from that PDF.
 
 ```bash
-python - <<'PY'
+python - "path/to/your-document.pdf" "What are the main recommendations?" <<'PY'
+import sys
 from pathlib import Path
+
+from app.services.answer_service import answer_question
 from app.services.ingestion_service import ingest_pdf
 
-pdf = Path("examples/parser_sample.pdf")
+pdf = Path(sys.argv[1])
 report = ingest_pdf(pdf.read_bytes(), pdf.name)
-print(f"Processed {report.pages_processed} pages; stored {report.chunks_created} chunks.")
-PY
-```
-
-Ask a question about the ingested content:
-
-```bash
-python - <<'PY'
-from app.services.answer_service import answer_question
+print(f"{report.file_id}: {report.pages_processed} pages, {report.chunks_created} chunks")
 
 result = answer_question(
-    "How long do I have to return a product?",
+    sys.argv[2],
     top_k=3,
+    file_id=report.file_id,
     source_type="pdf",
 )
 print(result.answer)
@@ -167,3 +171,51 @@ MATCH p=(:Entity)-[r:REL]->(:Entity)
 WHERE r.file_id = 'YOUR_FILE_ID'
 RETURN p;
 ```
+
+### Resolve duplicates and summarize communities
+
+Use `POST /graph/resolve-entities` to review proposed merges and the reason for each one. The default `apply=false` previews suggestions across the whole graph. An `apply=true` request generates its own set of suggestions and applies them, so its pairs can differ from a previous preview.
+
+`POST /graph/communities` runs Louvain on a temporary in-memory graph projection. It writes community IDs to the Neo4j entity nodes and drops the projection afterward. Groq receives each qualifying group's internal relationships and relevant passages from Qdrant when available. `min_size` controls the smallest group to summarize. A higher value can reduce the number of Groq calls when trying the endpoint on a populated graph.
+
+## Generate meeting minutes
+
+After ingesting a recording, call `POST /minutes/{file_id}` or `POST /minutes/by-name?name=your-recording.mp4`. Name matching is case-insensitive and accepts a partial filename that matches a single video. Both endpoints read the stored video content from Qdrant and use Groq to write the minutes. The prompts instruct the model to record demo activities under Key Points and reserve Decisions and Action Items for explicit commitments.
+
+`MOM_BATCH_CHARS` sets the character budget used to group the stored text. When the text fits in one batch, the response reports `single-pass`. With multiple batches, `map-reduce` writes partial minutes for each batch and combines them in a final call.
+
+## n8n workflows
+
+With FastAPI running, open [n8n](http://localhost:5678) and use the workflow menu's **Import from File** option for the exports below. The HTTP Request nodes use Docker Desktop's `host.docker.internal` to reach the host. Update the node URLs if your n8n container connects to FastAPI or the email webhook through a different address. [n8n workflow import guide](https://docs.n8n.io/build/manage-workflows/export-and-import/#from-the-editor-ui-menu)
+
+| Workflow | What it does |
+|---|---|
+| [API Health Check](n8n_workflows/api_health_check.json) | Manually calls `/health` to check that n8n can reach FastAPI |
+| [Upload & Ingest](n8n_workflows/upload_ingest_minutes_agent_workflow.json) | Uploads PDFs or videos from a form and builds each file's graph. Videos also go through a separate branch that generates minutes and emails them. The chat agent can search passages, ask GraphRAG questions, get community summaries and email minutes for an already ingested video. |
+| [Direct Upload Webhook](n8n_workflows/ingest_webhook.json) | Takes a multipart `file` from an HTTP client, forwards it to the PDF or video ingestion route and returns the ingestion report |
+
+Run **API Health Check** first and look for `{"status":"ok"}` in the HTTP Request output.
+
+In **Upload & Ingest**, configure the Groq Chat Model credential and select your Gmail OAuth2 credential on both Gmail nodes. Replace `you@example.com` on both nodes with your intended recipient. Enable the Gmail API in Google Cloud and enter the redirect URI shown by n8n when creating the OAuth client. For a credential used only to send minutes, set the custom scope to `https://www.googleapis.com/auth/gmail.send` and leave the optional Sender Name blank. [n8n Google OAuth2 setup](https://docs.n8n.io/integrations/builtin/credentials/google/oauth-single-service/)
+
+To try a form upload, run the workflow in the editor and submit a PDF through the test form. Open **Ingest file** to see its `file_id` and **Build graph** to see the graph report. The chat email tool uses the production `/webhook/email-minutes` URL, which is registered when you publish the workflow. [n8n webhook URLs](https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.webhook/#webhook-urls)
+
+To try **Direct Upload Webhook**, click **Listen for test event** on its Webhook node, then run this command with your chosen file. The response includes the `file_id` for later search or graph building. [n8n webhook testing](https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.webhook/#webhook-urls)
+
+```bash
+curl --fail-with-body \
+  -F 'file=@path/to/your-document.pdf' \
+  'http://localhost:5678/webhook-test/ingest'
+```
+
+## Tests and runtime storage
+
+After installing dependencies and configuring `.env`, run the automated tests from the repository root.
+
+```bash
+python -m unittest discover -s tests
+```
+
+The tests cover translation routing, cache reuse, and the order of steps in the graph pipeline. They replace external calls with test doubles, so they can run without starting the services.
+
+The app creates its local `storage/` subdirectories as needed. Video uploads use `storage/uploads/` for temporary files, which are removed after processing. Completed translations are cached under `storage/translations/`. Qdrant and Neo4j keep their database contents in the Docker volumes from the setup commands.
