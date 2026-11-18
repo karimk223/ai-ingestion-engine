@@ -18,6 +18,7 @@ from qdrant_client.models import (
     FieldCondition,
     MatchValue,
     ScoredPoint,
+    Range,
 )
 from app.config import settings
 
@@ -130,6 +131,9 @@ def upsert_chunks(
     if frame_numbers is not None and len(frame_numbers) != len(chunks):
         raise ValueError("frame_numbers length must match chunks length")
 
+    if not chunks:
+        return 0
+
     client = get_client()
     points = []
     for i, (chunk_text, vector, page_num) in enumerate(zip(chunks, vectors, page_numbers)):
@@ -172,7 +176,21 @@ def upsert_chunks(
             )
         )
 
-    client.upsert(collection_name=settings.QDRANT_COLLECTION, points=points)
+    client.upsert(
+        collection_name=settings.QDRANT_COLLECTION,
+        points=points,
+        wait=True,
+    )
+
+    client.delete(
+        collection_name=settings.QDRANT_COLLECTION,
+        points_selector=Filter(must=[
+            FieldCondition(key="file_id", match=MatchValue(value=file_id)),
+            FieldCondition(key="chunk_index", range=Range(gte=len(points))),
+        ]),
+        wait=True,
+    )
+
     return len(points)
 
 

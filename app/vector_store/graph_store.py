@@ -72,6 +72,19 @@ def count_graph() -> dict:
     return {"nodes": nodes, "relationships": rels}
 
 
+def get_all_triples() -> list[dict]:
+    """Read the relationships and their source files from Neo4j."""
+    query = """
+    MATCH (s:Entity)-[r:REL]->(o:Entity)
+    RETURN s.name AS subject,
+           r.predicate AS predicate,
+           o.name AS object,
+           r.file_id AS file_id,
+           r.file_name AS file_name
+    """
+    with get_driver().session() as session:
+        return session.run(query).data()
+
 def clear_file(file_id: str) -> None:
     driver = get_driver()
 

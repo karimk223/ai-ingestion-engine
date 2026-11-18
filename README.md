@@ -1,6 +1,6 @@
 # AI Ingestion Engine
 
-A FastAPI service that makes PDFs and videos searchable and answers questions with source references. It combines OCR, speech transcription, multilingual semantic search and optional Neo4j graph context. The included n8n workflows automate uploads, graph building and meeting-minutes delivery, and provide a chat interface for the knowledge base.
+A FastAPI service that makes PDFs and videos searchable and answers questions with source references. It combines OCR, speech transcription, multilingual semantic search and optional Neo4j graph context. The included n8n workflows automate uploads, graph building and meeting-minutes delivery, and provide a chat interface for the knowledge base. Standalone scripts support reviewing video documents before ingestion, processing folders of PDFs and videos, and exporting linked notes to Obsidian.
 
 ## Available modules
 
@@ -20,6 +20,9 @@ A FastAPI service that makes PDFs and videos searchable and answers questions wi
 - **Entity resolution:** previews likely duplicate names across the graph and can merge them while preserving relationship direction and source file references.
 - **Community summaries:** groups related entities with Neo4j Graph Data Science and uses Groq to summarize each eligible group from its relationships and relevant passages.
 - **Meeting minutes:** generates structured minutes from a stored video, using a single pass or summarizing batches before combining them.
+- **Reviewed video documents:** saves a synthesized document for human review, then indexes the reviewed text under the original video ID.
+- **Folder ingestion:** processes PDFs and videos from one folder, builds each file's graph, and reports completed, skipped and failed files.
+- **Obsidian export:** creates Markdown notes for stored PDFs and videos, with inline links and related-note suggestions across both file types.
 - **n8n:** provides a form, a direct upload webhook, a chat workflow and a manual API health check.
 
 ## Local setup
@@ -39,9 +42,20 @@ Start Ollama if it is not already running. It hosts Gemma embeddings and local Q
 
 For video ingestion, set `GEMINI_API_KEY` in `.env`. Gemini describes frames and combines the speech and visual evidence. Frame description failures fall back to local OCR. If Gemini returns HTTP 503 during synthesis, the API uses Groq for that synthesis request. Whisper runs on the CPU and downloads the selected model on first use. Audio decoding uses the FFmpeg binary bundled with `imageio-ffmpeg`.
 
+The example configuration uses free-tier cloud API access. Provider quotas limit request frequency and input/output token budgets. For frequent ingestion or large files, configure accounts and models with sufficient limits; this may require a paid plan. Request sizes must still fit the selected model and account limits. Consult the provider's current account limits before running a large batch.
+
+Cloud model selection is configured in `.env`:
+
+| Provider | API key | Model settings |
+|---|---|---|
+| Groq | `GROQ_API_KEY` | `ANSWER_MODEL`, `QUESTION_ENTITY_MODEL`, `TRANSLATION_MODEL` |
+| Gemini | `GEMINI_API_KEY` | `VISION_MODEL`, `SYNTHESIS_MODEL` |
+
+Use compatible models with the required input capabilities and request parameters. Restart the API after changing `.env`; command-line scripts load configuration on each run. The current clients target Groq and Google's Gemini endpoints. Integrating OpenAI or another provider also requires adapting the relevant client endpoint, key selection and request parameters; changing model names or setting `OPENAI_API_KEY` alone does not switch providers.
+
 The example uses the Qdrant collection `content_chunks_gemma`. If changing from another embedding model, re-embed existing chunks into a separate collection before switching the application. Equal vector dimensions do not make different models' embeddings compatible.
 
-Start the local services. Neo4j is needed for graph features and n8n is needed for the workflows.
+Start the local services. Neo4j is needed for graph features and the Obsidian exporter; n8n is needed for the workflows.
 
 ```bash
 docker run -d --name qdrant -p 6333:6333 -p 6334:6334 -v qdrant_storage:/qdrant/storage qdrant/qdrant:latest
@@ -82,8 +96,6 @@ Upload a video through `POST /ingest/video` in `/docs`. The endpoint accepts `.m
 For a recording that switches languages, set `mixed_language=true` in Swagger or call `POST /ingest/video?mixed_language=true`. FFmpeg decodes the audio and detects pauses of at least one second. The service splits the audio at eligible pauses and uses Whisper `small` to detect the language and transcribe each part separately. The regular upload uses the configured `WHISPER_MODEL`, which defaults to `base`.
 
 The example configuration samples frames every five seconds and paces model calls with `LLM_CALL_DELAY_SECONDS`. With `DESCRIBE_FRAMES=false`, frame processing uses local OCR to read visible text. Synthesis groups the frame descriptions and timestamped speech into windows and combines them into one Markdown document before indexing. The resulting text chunks cite the video filename. Transcription failures and vision fallbacks are logged.
-
-The upload-to-answer flow was tested with English and French Odoo CRM clips and a recording with both English and French speech.
 
 ## HTTP API
 
@@ -146,7 +158,7 @@ PY
 
 ## Extract connections and build a graph
 
-Use the `file_id` returned by PDF or video ingestion. In `/docs`, `POST /extract/{file_id}` provides an optional preview without saving to Neo4j. `POST /graph/build/{file_id}` performs extraction and saves the result; a preview is not required. `GET /graph/stats` shows whole-graph totals. The English CRM video has been checked through extraction, graph building and a file-scoped GraphRAG answer.
+Use the `file_id` returned by PDF or video ingestion. In `/docs`, `POST /extract/{file_id}` provides an optional preview without saving to Neo4j. `POST /graph/build/{file_id}` performs extraction and saves the result; a preview is not required. `GET /graph/stats` shows whole-graph totals.
 
 With Qdrant, Ollama and Neo4j running and the Groq key configured, the same build is available from Python:
 
@@ -183,6 +195,72 @@ Use `POST /graph/resolve-entities` to review proposed merges and the reason for 
 After ingesting a recording, call `POST /minutes/{file_id}` or `POST /minutes/by-name?name=your-recording.mp4`. Name matching is case-insensitive and accepts a partial filename that matches a single video. Both endpoints read the stored video content from Qdrant and use Groq to write the minutes. The prompts instruct the model to record demo activities under Key Points and reserve Decisions and Action Items for explicit commitments.
 
 `MOM_BATCH_CHARS` sets the character budget used to group the stored text. When the text fits in one batch, the response reports `single-pass`. With multiple batches, `map-reduce` writes partial minutes for each batch and combines them in a final call.
+
+## Review a video document before ingestion
+
+The two helper scripts separate document generation from indexing. Run them from the repository root in an activated virtual environment.
+
+First, generate a Markdown document from a video:
+
+```bash
+python synthesize_video.py "path/to/video.mp4" "reviewed_document.md"
+```
+
+The script combines frame descriptions and the speech transcript, saves the document, and stops before writing to Qdrant. Open the Markdown file and review or edit its contents. If no usable speech or on-screen content is available, generation stops with an explanatory error. When only one source is available, the script reports whether it is using speech or on-screen content alone.
+
+Index the reviewed document using the original video file:
+
+```bash
+python ingest_document.py "reviewed_document.md" "path/to/video.mp4"
+```
+
+This stores the reviewed text without repeating frame processing or synthesis. The original video's contents determine its file ID, matching normal video ingestion. Re-indexing updates that video's chunks and removes any surplus chunks left by an older, longer document. Empty documents are rejected before storage. Rebuild the file's graph afterward using the returned file ID, as described under **Extract connections and build a graph**.
+
+## Ingest a folder of PDFs and videos
+
+The folder script runs ingestion and graph building automatically for each supported file. It requires Ollama, Qdrant and Neo4j, plus the cloud credentials required by the selected processing steps. It calls the application services directly, so a running FastAPI server is not required.
+
+```bash
+python ingest_folder.py "path/to/folder"
+```
+
+The script reads the folder's top level and accepts `.pdf`, `.mp4`, `.mov`, `.avi`, `.mkv` and `.webm` files, including uppercase extensions. Example input:
+
+```text
+input/
+    guide.pdf
+    demo.mp4
+    demo_document.md
+    training.mov
+```
+
+PDFs use the PDF extraction, OCR, chunking and embedding pipeline. For each video, the script looks for a companion Markdown file named `<video_stem>_document.md` in the same folder. If present, that document is ingested, preserving any edits. Otherwise, the script generates it and immediately ingests it, without pausing for review. Existing Qdrant data does not prevent a supplied document from updating that video's indexed text. Use distinct video basenames within a folder so each video has its own companion document.
+
+Graph building follows ingestion for each non-skipped file. Zero-byte files and PDFs with no readable text are skipped with a reason. Videos with no usable speech or on-screen content, or documents that produce no chunks, are also skipped. Other processing errors are reported per file while the batch continues. A summary reports completed, skipped and failed counts; exit status is `0` when no files failed and `1` when at least one did. The script waits five seconds between files.
+
+Indexing and graph building are separate stages. After updating indexed text, rebuild its graph to reflect that text; rerunning the folder script performs both stages. To review every video document before indexing, generate and review the documents with the single-video helper first, then run the folder importer with those companion files present. There is no separate folder-wide preparation command.
+
+## Export PDF and video notes to Obsidian
+
+With Qdrant and Neo4j running and files already ingested, run this command from the repository root in the activated virtual environment:
+
+```bash
+python obsidian_export.py
+```
+
+The exporter creates one Markdown note per stored PDF or video in `obsidian_vault/`. It reads the saved text from Qdrant, restores chunk order, and uses the extracted relationships in Neo4j to choose links between notes. It includes PDF-to-PDF, PDF-to-video and video-to-video links when eligible matches exist. Files without extracted relationships still receive a note. Build each file's graph first to make its entities available for linking.
+
+Each note contains the saved PDF text or synthesized video document. The exporter adds at most eight inline links, with one new link per selected entity, and up to three related notes under **See also**. It preserves existing Markdown links and code blocks when inserting links. Shared entity names and connecting relationships guide the suggestions; the links are candidates for navigation, rather than proof that two files discuss the same subject. PDF text is exported as text, without recreating the original page layout.
+
+To choose a different output folder, pass its path:
+
+```bash
+python obsidian_export.py /path/to/your/vault
+```
+
+Open Obsidian, choose **Open folder as vault**, and select the generated folder. Click the inline links or **See also** entries to navigate between notes. Run **Graph view: Open graph view** from Obsidian's command palette to see notes as dots and note links as lines. Notes without links appear separately.
+
+Re-running the export overwrites the corresponding Markdown notes. Edits made in Obsidian stay in the note files and are not imported into Qdrant or Neo4j. The default `obsidian_vault/` folder is excluded from Git.
 
 ## n8n workflows
 
